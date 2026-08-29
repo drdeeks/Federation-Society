@@ -1,0 +1,33 @@
+name: Sync Submodules
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout super-repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          token: ${{ secrets.SUBMODULE_SYNC_TOKEN }}
+          submodules: true
+
+      - name: Update submodules to remote HEAD
+        run: |
+          git config user.name "Federation Society Bot"
+          git config user.email "bot@federation.society"
+          git submodule update --remote --recursive
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "chore: auto-sync submodules to remote HEAD"
+            git push origin HEAD:main
+          fi

@@ -1,0 +1,11 @@
+# Federation-Society super-repo root ignore
+# Submodule packages (watchtower, adapters/watchtower-adapter, federation, agent-character-kit)
+# manage their own ignores. This covers only the super-repo shell.
+
+# Local recoverable scratch
+.trash/
+
+# OS / editor noise
+.DS_Store
+*.swp
+*~

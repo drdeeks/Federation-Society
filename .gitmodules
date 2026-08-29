@@ -1,0 +1,15 @@
+[submodule "watchtower"]
+	path = watchtower
+	url = https://github.com/drdeeks/federation-watchtower.git
+[submodule "plugins/watchtower-adapter"]
+	path = plugins/watchtower-adapter
+	url = https://github.com/drdeeks/watchtower-adapter.git
+[submodule "plugins/watchtower-sdk"]
+	path = plugins/watchtower-sdk
+	url = https://github.com/drdeeks/federation-watchtower-sdk.git
+[submodule "federation"]
+	path = federation
+	url = https://github.com/drdeeks/federation.git
+[submodule "agent-character-kit"]
+	path = agent-character-kit
+	url = https://github.com/drdeeks/agent-character-kit.git
