@@ -1,33 +1,112 @@
-name: Sync Submodules
+name: Synchronize Federation Submodules
 
 on:
   schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch: {}
-  push:
-    branches: [main]
+    - cron: "0 * * * *"
+
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  sync:
+  synchronize:
+    name: Synchronize submodules
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout super-repo
+      - name: Checkout Federation Society
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository }}
-          token: ${{ secrets.SUBMODULE_SYNC_TOKEN }}
-          submodules: true
+          fetch-depth: 0
+          submodules: recursive
 
-      - name: Update submodules to remote HEAD
+      - name: Initialize submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Validate submodule tracking
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f .gitmodules ]; then
+            echo "No .gitmodules file found."
+            exit 0
+          fi
+
+          git config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
+          while read -r key path; do
+            name="${key#submodule.}"
+            name="${name%.path}"
+
+            branch=$(git config --file .gitmodules \
+              --get "submodule.${name}.branch" || true)
+
+            if [ -n "$branch" ]; then
+              echo "::warning file=.gitmodules::${path} explicitly tracks '${branch}' instead of remote HEAD"
+            else
+              echo "OK: ${path} follows remote HEAD"
+            fi
+          done
+
+      - name: Configure submodules to follow remote HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f .gitmodules ]; then
+            echo "No .gitmodules file found."
+            exit 0
+          fi
+
+          git config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
+          while read -r key path; do
+            name="${key#submodule.}"
+            name="${name%.path}"
+
+            echo "Configuring ${path} to follow remote HEAD"
+
+            git config --file .gitmodules \
+              --unset "submodule.${name}.branch" || true
+          done
+
+          git submodule sync --recursive
+
+      - name: Update submodules from upstream default branches
+        run: |
+          git submodule update --remote --recursive
+
+      - name: Show synchronization results
+        run: |
+          echo "=== Submodule Status ==="
+          git submodule status --recursive
+
+          echo
+          echo "=== Git Status ==="
+          git status --short
+
+          echo
+          echo "=== Configured Submodules ==="
+          git config --file .gitmodules --get-regexp '^submodule\..*\.(path|url)$' || true
+
+      - name: Configure Git
         run: |
           git config user.name "Federation Society Bot"
-          git config user.email "bot@federation.society"
-          git submodule update --remote --recursive
-          if [ -n "$(git status --porcelain)" ]; then
-            git add -A
-            git commit -m "chore: auto-sync submodules to remote HEAD"
-            git push origin HEAD:main
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit updated submodule references
+        run: |
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "Federation is already synchronized."
+            exit 0
           fi
+
+          git commit -m "chore: synchronize Federation submodules"
+
+      - name: Push synchronized references
+        run: |
+          git push origin HEAD:main
