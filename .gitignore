@@ -9,3 +9,8 @@
 .DS_Store
 *.swp
 *~
+
+# Python bytecode (covers submodules that miss it)
+__pycache__/
+*.pyc
+*.pyo
