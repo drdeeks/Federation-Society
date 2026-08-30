@@ -10,6 +10,6 @@
 [submodule "federation"]
 	path = federation
 	url = https://github.com/drdeeks/federation.git
-[submodule "agent-character-kit"]
-	path = agent-character-kit
+[submodule "plugins/agent-character-kit"]
+	path = plugins/agent-character-kit
 	url = https://github.com/drdeeks/agent-character-kit.git
