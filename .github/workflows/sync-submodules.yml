@@ -1,112 +1,226 @@
-name: Synchronize Federation Submodules
+name: Sync Federation Family Submodules
 
 on:
   schedule:
     - cron: "0 * * * *"
-
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: federation-family-sync
+  cancel-in-progress: false
+
 jobs:
-  synchronize:
-    name: Synchronize submodules
+  sync:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Federation Society
+      - name: Checkout Federation-Society
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Initialize submodules
+      - name: Configure Git
+        shell: bash
         run: |
-          git submodule sync --recursive
-          git submodule update --init --recursive
+          set -euo pipefail
+          git config user.name "federation-sync[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Validate submodule tracking
+      - name: Validate Federation family topology
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -f .gitmodules ]; then
-            echo "No .gitmodules file found."
-            exit 0
-          fi
+          declare -A EXPECTED=(
+            ["federation"]="https://github.com/drdeeks/the-federation.git"
+            ["watchtower"]="https://github.com/drdeeks/federation-watchtower.git"
+            ["plugins/watchtower-sdk"]="https://github.com/drdeeks/watchtower-sdk.git"
+            ["plugins/watchtower-adapter"]="https://github.com/drdeeks/watchtower-adapter.git"
+            ["plugins/agent-character-kit"]="https://github.com/drdeeks/agent-character-kit.git"
+          )
 
-          git config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
-          while read -r key path; do
+          echo "=== FEDERATION FAMILY TOPOLOGY ==="
+
+          while read -r key url; do
             name="${key#submodule.}"
-            name="${name%.path}"
+            name="${name%.url}"
+            path="$(git config -f .gitmodules --get "submodule.${name}.path")"
 
-            branch=$(git config --file .gitmodules \
-              --get "submodule.${name}.branch" || true)
+            if [[ -z "${EXPECTED[$path]+x}" ]]; then
+              echo "::error::Unexpected submodule: $path"
+              exit 1
+            fi
 
-            if [ -n "$branch" ]; then
-              echo "::warning file=.gitmodules::${path} explicitly tracks '${branch}' instead of remote HEAD"
-            else
-              echo "OK: ${path} follows remote HEAD"
+            if [[ "${EXPECTED[$path]}" != "$url" ]]; then
+              echo "::error::$path has incorrect URL"
+              echo "Expected: ${EXPECTED[$path]}"
+              echo "Actual:   $url"
+              exit 1
+            fi
+
+            echo "✓ $path -> $url"
+          done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.url$')
+
+          for path in "${!EXPECTED[@]}"; do
+            if ! git config -f .gitmodules --get-regexp "^submodule\..*\.path$" | awk '{print $2}' | grep -Fxq "$path"; then
+              echo "::error::Missing required submodule: $path"
+              exit 1
             fi
           done
 
-      - name: Configure submodules to follow remote HEAD
+          echo "✓ Federation family topology validated."
+
+      - name: Synchronize submodule configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Preflight submodule remotes
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -f .gitmodules ]; then
-            echo "No .gitmodules file found."
-            exit 0
+          echo "=== SUBMODULE REMOTE PREFLIGHT ==="
+
+          failed=0
+
+          git submodule foreach --recursive '
+            path="$displaypath"
+            url="$(git remote get-url origin 2>/dev/null || true)"
+
+            if [[ -z "$url" ]]; then
+              echo "::error::$path has no origin remote"
+              exit 1
+            fi
+
+            echo "Checking $path"
+            echo "  remote: $url"
+
+            if ! git ls-remote --exit-code "$url" HEAD >/dev/null 2>&1; then
+              echo "::error::$path remote is unreachable: $url"
+              exit 1
+            fi
+
+            echo "  ✓ reachable"
+          ' || failed=1
+
+          if [[ "$failed" -ne 0 ]]; then
+            echo "::error::One or more Federation family repositories failed preflight."
+            exit 1
           fi
 
-          git config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
-          while read -r key path; do
-            name="${key#submodule.}"
-            name="${name%.path}"
-
-            echo "Configuring ${path} to follow remote HEAD"
-
-            git config --file .gitmodules \
-              --unset "submodule.${name}.branch" || true
-          done
-
-          git submodule sync --recursive
-
-      - name: Update submodules from upstream default branches
+      - name: Capture current pins
+        shell: bash
         run: |
+          set -euo pipefail
+
+          echo "=== PINS BEFORE SYNC ==="
+          git submodule status --recursive | tee /tmp/submodule-before.txt
+
+      - name: Update Federation family
+        shell: bash
+        run: |
+          set -euo pipefail
+
           git submodule update --remote --recursive
 
-      - name: Show synchronization results
+      - name: Generate synchronization report
+        shell: bash
         run: |
-          echo "=== Submodule Status ==="
+          set -euo pipefail
+
+          echo "=== FEDERATION FAMILY SYNC REPORT ==="
+          echo
+          printf "%-35s %-12s %-12s %s\n" "COMPONENT" "BEFORE" "AFTER" "STATUS"
+          printf "%-35s %-12s %-12s %s\n" \
+            "-----------------------------------" \
+            "------------" \
+            "------------" \
+            "------"
+
+          declare -A BEFORE
+
+          while read -r sha path rest; do
+            clean_sha="${sha#[-+U]}"
+            BEFORE["$path"]="$clean_sha"
+          done < /tmp/submodule-before.txt
+
+          while read -r sha path rest; do
+            clean_sha="${sha#[-+U]}"
+            before="${BEFORE[$path]:-unknown}"
+
+            if [[ "$before" == "$clean_sha" ]]; then
+              status="✓ unchanged"
+            else
+              status="↑ UPDATED"
+            fi
+
+            printf "%-35s %-12s %-12s %s\n" \
+              "$path" \
+              "${before:0:10}" \
+              "${clean_sha:0:10}" \
+              "$status"
+          done < <(git submodule status --recursive)
+
+          echo
+          echo "=== SUPERPROJECT CHANGES ==="
+          git status --short
+
+      - name: Validate resulting submodule state
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== FINAL SUBMODULE STATE ==="
           git submodule status --recursive
 
           echo
-          echo "=== Git Status ==="
-          git status --short
+          echo "=== VERIFY EACH SUBMODULE HEAD ==="
 
-          echo
-          echo "=== Configured Submodules ==="
-          git config --file .gitmodules --get-regexp '^submodule\..*\.(path|url)$' || true
+          git submodule foreach --recursive '
+            test -n "$(git rev-parse HEAD)"
+            echo "✓ $displaypath @ $(git rev-parse --short HEAD)"
+          '
 
-      - name: Configure Git
+      - name: Commit and push updated pins
+        shell: bash
         run: |
-          git config user.name "Federation Society Bot"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
 
-      - name: Commit updated submodule references
-        run: |
-          git add -A
+          git add .gitmodules federation watchtower plugins
 
           if git diff --cached --quiet; then
-            echo "Federation is already synchronized."
+            echo "No Federation family changes detected."
             exit 0
           fi
 
-          git commit -m "chore: synchronize Federation submodules"
+          echo "=== CHANGES TO BE COMMITTED ==="
+          git diff --cached --submodule=short
 
-      - name: Push synchronized references
-        run: |
+          git commit \
+            -m "chore: synchronize Federation family submodules"
+
           git push origin HEAD:main
+
+      - name: Final report
+        if: always()
+        shell: bash
+        run: |
+          echo
+          echo "=============================================="
+          echo "        FEDERATION FAMILY SYNC COMPLETE"
+          echo "=============================================="
+          echo
+          echo "Final submodule state:"
+          git submodule status --recursive || true
+          echo
+          echo "Superproject HEAD:"
+          git rev-parse --short HEAD || true
+EOF
